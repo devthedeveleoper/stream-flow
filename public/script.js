@@ -26,6 +26,7 @@
     const videoOverlay = document.getElementById('videoOverlay');
     const historySection = document.getElementById('historySection');
     const historyList = document.getElementById('historyList');
+    const videoTitle = document.getElementById('videoTitle');
 
     // ===== State =====
     let isDragging = false;
@@ -50,6 +51,22 @@
             showToast('Please enter a video URL', true);
             return;
         }
+
+        videoTitle.textContent = 'Loading...';
+        
+        // Fetch metadata
+        fetch('/metadata?url=' + encodeURIComponent(urlInput.value.trim()))
+            .then(res => res.json())
+            .then(data => {
+                if (data.title) {
+                    videoTitle.textContent = data.title;
+                } else {
+                    videoTitle.textContent = '';
+                }
+            })
+            .catch(() => {
+                videoTitle.textContent = '';
+            });
 
         const useProxy = useProxyCheckbox.checked;
         if (!retryUrl && useProxy) {
@@ -122,7 +139,7 @@
                 historySection.style.display = 'block';
                 historyList.innerHTML = history.map((item, index) => `
                     <div class="history-item" data-index="${index}">
-                        <span class="history-url" title="${item.originalUrl}">${item.originalUrl}</span>
+                        <span class="history-url" title="${item.title || item.originalUrl}">${item.title || item.originalUrl}</span>
                         <span class="history-time">${formatTime(item.time)}</span>
                     </div>
                 `).join('');
@@ -148,12 +165,14 @@
         try {
             let history = JSON.parse(localStorage.getItem('sf_history') || '[]');
             const originalUrl = urlInput.value.trim();
+            const currentTitle = videoTitle.textContent && videoTitle.textContent !== 'Loading...' ? videoTitle.textContent : originalUrl;
             
             // Remove existing entry for same URL
             history = history.filter(h => h.originalUrl !== originalUrl);
             
             // Add to top
             history.unshift({
+                title: currentTitle,
                 originalUrl: originalUrl,
                 usedProxy: useProxyCheckbox.checked,
                 time: video.currentTime,

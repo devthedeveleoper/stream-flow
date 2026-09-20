@@ -566,6 +566,25 @@ body.theater-mode .main {
     border-radius: 4px;
 }
 
+/* --- Video Title Overlay --- */
+.video-title {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 24px 20px 40px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 500;
+    z-index: 10;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: opacity 0.3s;
+}
+
 .speed-select {
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);

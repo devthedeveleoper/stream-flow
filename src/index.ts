@@ -30,6 +30,82 @@ function handleOptions(request: Request) {
 	}
 }
 
+async function handleMetadata(request: Request): Promise<Response> {
+	const url = new URL(request.url);
+	const videoUrl = url.searchParams.get('url');
+
+	if (!videoUrl) {
+		return Response.json({ error: 'Missing url parameter' }, { status: 400, headers: corsHeaders });
+	}
+
+	try {
+		const parsedVideoUrl = new URL(videoUrl);
+		if (parsedVideoUrl.protocol !== 'http:' && parsedVideoUrl.protocol !== 'https:') {
+			return Response.json({ error: 'Invalid URL protocol' }, { status: 400, headers: corsHeaders });
+		}
+		
+		const hostname = parsedVideoUrl.hostname;
+		if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '169.254.169.254' || hostname === '0.0.0.0' || hostname.endsWith('.internal')) {
+			return Response.json({ error: 'Access to internal network is forbidden' }, { status: 403, headers: corsHeaders });
+		}
+	} catch (e) {
+		return Response.json({ error: 'Invalid URL parameter' }, { status: 400, headers: corsHeaders });
+	}
+
+	try {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+		const response = await fetch(videoUrl, {
+			method: 'HEAD',
+			headers: {
+				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 StreamFlow/1.0',
+			},
+			signal: controller.signal
+		});
+		
+		clearTimeout(timeoutId);
+
+		let title = '';
+		
+		const contentDisposition = response.headers.get('content-disposition');
+		if (contentDisposition) {
+			const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+			if (filenameMatch && filenameMatch[1]) {
+				title = filenameMatch[1].replace(/['"]/g, '');
+			}
+		}
+		
+		if (!title) {
+			const parsedUrl = new URL(videoUrl);
+			const pathname = parsedUrl.pathname;
+			const lastSegment = pathname.substring(pathname.lastIndexOf('/') + 1);
+			if (lastSegment) {
+				title = decodeURIComponent(lastSegment);
+			} else {
+				title = parsedUrl.hostname;
+			}
+		}
+
+		return Response.json({ 
+			title: title,
+			contentType: response.headers.get('content-type'),
+			contentLength: response.headers.get('content-length')
+		}, { headers: corsHeaders });
+
+	} catch (error) {
+		try {
+			const parsedUrl = new URL(videoUrl);
+			const pathname = parsedUrl.pathname;
+			const lastSegment = pathname.substring(pathname.lastIndexOf('/') + 1);
+			const title = lastSegment ? decodeURIComponent(lastSegment) : parsedUrl.hostname;
+			return Response.json({ title: title }, { headers: corsHeaders });
+		} catch (e) {
+			return Response.json({ error: 'Failed to fetch metadata' }, { status: 500, headers: corsHeaders });
+		}
+	}
+}
+
 async function handleProxy(request: Request): Promise<Response> {
 	const url = new URL(request.url);
 	const videoUrl = url.searchParams.get('url');
@@ -157,6 +233,8 @@ export default {
 						},
 						{ headers: corsHeaders }
 					);
+				case '/metadata':
+					return handleMetadata(request);
 				case '/proxy':
 					return handleProxy(request);
 			}
