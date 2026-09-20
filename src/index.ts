@@ -1,26 +1,167 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
+export interface Env {
+	ENVIRONMENT?: string;
+}
+
+const corsHeaders = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
+	'Access-Control-Allow-Headers': 'Range, Content-Type, Accept, Origin',
+	'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+	'Access-Control-Max-Age': '86400',
+};
+
+function handleOptions(request: Request) {
+	if (
+		request.headers.get('Origin') !== null &&
+		request.headers.get('Access-Control-Request-Method') !== null &&
+		request.headers.get('Access-Control-Request-Headers') !== null
+	) {
+		// Handle CORS preflight requests
+		return new Response(null, {
+			headers: corsHeaders,
+		});
+	} else {
+		// Handle standard OPTIONS request
+		return new Response(null, {
+			headers: {
+				Allow: 'GET, HEAD, POST, OPTIONS',
+			},
+		});
+	}
+}
+
+async function handleProxy(request: Request): Promise<Response> {
+	const url = new URL(request.url);
+	const videoUrl = url.searchParams.get('url');
+
+	if (!videoUrl) {
+		return Response.json({ error: 'Missing url parameter' }, { status: 400, headers: corsHeaders });
+	}
+
+	// Security Check
+	try {
+		const parsedVideoUrl = new URL(videoUrl);
+		if (parsedVideoUrl.protocol !== 'http:' && parsedVideoUrl.protocol !== 'https:') {
+			return Response.json({ error: 'Invalid URL protocol' }, { status: 400, headers: corsHeaders });
+		}
+		
+		// SSRF protection (basic check)
+		const hostname = parsedVideoUrl.hostname;
+		if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '169.254.169.254' || hostname === '0.0.0.0' || hostname.endsWith('.internal')) {
+			return Response.json({ error: 'Access to internal network is forbidden' }, { status: 403, headers: corsHeaders });
+		}
+	} catch (e) {
+		return Response.json({ error: 'Invalid URL parameter' }, { status: 400, headers: corsHeaders });
+	}
+
+	const range = request.headers.get('range');
+	const method = request.method;
+
+	try {
+		const headers: Record<string, string> = {
+			'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 StreamFlow/1.0',
+			Accept: '*/*',
+			'Accept-Encoding': 'identity',
+			Connection: 'keep-alive',
+		};
+
+		if (range) {
+			headers['Range'] = range;
+		}
+
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 seconds
+
+		const response = await fetch(videoUrl, {
+			method: method,
+			headers: headers,
+			signal: controller.signal
+		});
+		
+		clearTimeout(timeoutId);
+
+		if (!response.ok && response.status !== 206) {
+			return Response.json(
+				{ error: `Source responded with ${response.status}` },
+				{ status: 502, headers: corsHeaders }
+			);
+		}
+
+		const contentType = response.headers.get('content-type') || 'video/mp4';
+		const contentLength = response.headers.get('content-length');
+		const contentRange = response.headers.get('content-range');
+
+		const responseHeaders: Record<string, string> = {
+			...corsHeaders,
+			'Content-Type': contentType,
+			'Accept-Ranges': 'bytes',
+			'Cache-Control': 'public, max-age=3600', 
+		};
+
+		let statusCode = response.status;
+
+		if (range && statusCode === 200) {
+			statusCode = 206;
+			if (contentLength) {
+				const rangeMatch = range.match(/bytes=(\d+)-(\d*)/);
+				if (rangeMatch) {
+					const start = parseInt(rangeMatch[1]);
+					const end = rangeMatch[2] ? parseInt(rangeMatch[2]) : parseInt(contentLength) - 1;
+					responseHeaders['Content-Range'] = `bytes ${start}-${end}/${contentLength}`;
+					responseHeaders['Content-Length'] = String(end - start + 1);
+				}
+			}
+		} else if (contentLength) {
+			responseHeaders['Content-Length'] = contentLength;
+		}
+
+		if (contentRange) {
+			responseHeaders['Content-Range'] = contentRange;
+		}
+
+		const body = method === 'HEAD' ? null : response.body;
+
+		return new Response(body, {
+			status: statusCode,
+			headers: responseHeaders,
+		});
+	} catch (error) {
+		const isTimeout = error instanceof Error && error.name === 'AbortError';
+		return Response.json(
+			{
+				error: isTimeout ? 'Proxy request timed out' : 'Failed to proxy video',
+				details: error instanceof Error ? error.message : 'Unknown error',
+			},
+			{ status: isTimeout ? 504 : 500, headers: corsHeaders }
+		);
+	}
+}
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
-		const url = new URL(request.url);
-		switch (url.pathname) {
-			case '/message':
-				return new Response('Hello, World!');
-			case '/random':
-				return new Response(crypto.randomUUID());
-			default:
-				return new Response('Not Found', { status: 404 });
+		if (request.method === 'OPTIONS') {
+			return handleOptions(request);
 		}
+
+		const url = new URL(request.url);
+
+		if (request.method === 'GET' || request.method === 'HEAD') {
+			switch (url.pathname) {
+				case '/health':
+					return Response.json(
+						{
+							status: 'ok',
+							timestamp: new Date().toISOString(),
+							server: 'StreamFlow on Cloudflare (Native)',
+							environment: env.ENVIRONMENT || 'development',
+						},
+						{ headers: corsHeaders }
+					);
+				case '/proxy':
+					return handleProxy(request);
+			}
+		}
+
+		return new Response('Not Found', { status: 404, headers: corsHeaders });
 	},
 } satisfies ExportedHandler<Env>;
