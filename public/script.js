@@ -27,6 +27,7 @@
     const historySection = document.getElementById('historySection');
     const historyList = document.getElementById('historyList');
     const videoTitle = document.getElementById('videoTitle');
+    const shareBtn = document.getElementById('shareBtn');
 
     // ===== State =====
     let isDragging = false;
@@ -440,6 +441,40 @@
         localStorage.setItem('sf_speed', speedSelect.value);
         showToast(`${speedSelect.value}x Speed`);
     });
+
+    // Share
+    if (shareBtn) {
+        shareBtn.addEventListener('click', async () => {
+            if (!currentVideoUrl) return;
+            const shareUrl = window.location.origin + window.location.pathname + '?url=' + encodeURIComponent(urlInput.value.trim());
+            
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: videoTitle.textContent && videoTitle.textContent !== 'Loading...' ? videoTitle.textContent : 'StreamFlow Video',
+                        text: 'Watch this stream on StreamFlow!',
+                        url: shareUrl
+                    });
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        fallbackCopyTextToClipboard(shareUrl);
+                    }
+                }
+            } else {
+                fallbackCopyTextToClipboard(shareUrl);
+            }
+        });
+    }
+
+    function fallbackCopyTextToClipboard(text) {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Link copied to clipboard!');
+            }).catch(() => {
+                showToast('Failed to copy link', true);
+            });
+        }
+    }
 
     // PiP
     pipBtn.addEventListener('click', async () => {
