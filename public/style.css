@@ -513,11 +513,37 @@ body.theater-mode .main {
     border-top: 1px solid rgba(255,255,255,0.1);
     padding-top: 24px;
 }
+.history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
 .history-title {
     font-size: 1.1rem;
-    margin-bottom: 16px;
     color: rgba(255,255,255,0.9);
     font-weight: 500;
+}
+.clear-history-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.4);
+    cursor: pointer;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 8px;
+    transition: all 0.2s;
+}
+.clear-history-btn:hover {
+    color: #ff006e;
+    background: rgba(255,0,110,0.1);
+}
+.clear-history-btn svg {
+    width: 16px;
+    height: 16px;
 }
 .history-list {
     display: flex;

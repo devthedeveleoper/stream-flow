@@ -186,6 +186,15 @@
         } catch (e) {}
     }
 
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+    if (clearHistoryBtn) {
+        clearHistoryBtn.addEventListener('click', () => {
+            localStorage.removeItem('sf_history');
+            loadHistory();
+            showToast('History cleared');
+        });
+    }
+
     // Periodically save history if watching for a long time
     setInterval(() => {
         if (!video.paused && currentVideoUrl) saveToHistory();
