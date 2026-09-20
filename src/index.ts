@@ -76,8 +76,8 @@ async function handleMetadata(request: Request): Promise<Response> {
 			}
 		}
 		
+		const parsedUrl = new URL(videoUrl);
 		if (!title) {
-			const parsedUrl = new URL(videoUrl);
 			const pathname = parsedUrl.pathname;
 			const lastSegment = pathname.substring(pathname.lastIndexOf('/') + 1);
 			if (lastSegment) {
@@ -87,10 +87,21 @@ async function handleMetadata(request: Request): Promise<Response> {
 			}
 		}
 
+		const allHeaders: Record<string, string> = {};
+		response.headers.forEach((value, key) => {
+			allHeaders[key] = value;
+		});
+
 		return Response.json({ 
 			title: title,
 			contentType: response.headers.get('content-type'),
-			contentLength: response.headers.get('content-length')
+			contentLength: response.headers.get('content-length'),
+			serverStatus: response.status,
+			serverStatusText: response.statusText,
+			hostname: parsedUrl.hostname,
+			protocol: parsedUrl.protocol,
+			pathname: parsedUrl.pathname,
+			headers: allHeaders
 		}, { headers: corsHeaders });
 
 	} catch (error) {

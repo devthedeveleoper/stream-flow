@@ -11,6 +11,7 @@
     const pipBtn = document.getElementById('pipBtn');
     const theaterBtn = document.getElementById('theaterBtn');
     const muteBtn = document.getElementById('muteBtn');
+    const ccBtn = document.getElementById('ccBtn');
     const volumeSlider = document.getElementById('volumeSlider');
     const speedSelect = document.getElementById('speedSelect');
     const progressContainer = document.getElementById('progressContainer');
@@ -28,6 +29,7 @@
     const historyList = document.getElementById('historyList');
     const videoTitle = document.getElementById('videoTitle');
     const shareBtn = document.getElementById('shareBtn');
+    const subUrlInput = document.getElementById('subUrlInput');
 
     // ===== State =====
     let isDragging = false;
@@ -46,14 +48,23 @@
     if (savedSpeed) speedSelect.value = savedSpeed;
 
     // ===== Load Video =====
-    function loadVideo(retryUrl = null, resumeTime = 0) {
-        let url = retryUrl || urlInput.value.trim();
-        if (!url) {
+    function loadVideo(urlOverride = null, timeOverride = 0) {
+        let inputUrl = urlOverride || urlInput.value.trim();
+        if (!inputUrl) {
             showToast('Please enter a video URL', true);
             return;
         }
 
         videoTitle.textContent = 'Loading...';
+
+        // Clean up previous subtitles
+        Array.from(video.querySelectorAll('track')).forEach(t => t.remove());
+
+        // Load subtitles if provided
+        const subUrl = subUrlInput.value.trim();
+        if (subUrl) {
+            loadSubtitles(subUrl);
+        }
         
         // Fetch metadata
         fetch('/metadata?url=' + encodeURIComponent(urlInput.value.trim()))
@@ -78,13 +89,12 @@
             });
 
         const useProxy = useProxyCheckbox.checked;
-        if (!retryUrl && useProxy) {
-            // For HLS, proxying the master playlist often breaks relative TS segments unless the proxy rewrites them.
-            // But we'll leave it as requested for now.
-            url = '/proxy?url=' + encodeURIComponent(url);
+        let finalUrl = inputUrl;
+        if (!urlOverride && useProxy) {
+            finalUrl = '/proxy?url=' + encodeURIComponent(inputUrl);
         }
 
-        currentVideoUrl = url;
+        currentVideoUrl = finalUrl;
         
         // Clean up previous HLS instance if it exists
         if (hlsInstance) {
@@ -93,15 +103,15 @@
         }
 
         // HLS Support
-        if ((urlInput.value.trim().toLowerCase().includes('.m3u8') || url.toLowerCase().includes('.m3u8')) && window.Hls && Hls.isSupported()) {
+        if ((urlInput.value.trim().toLowerCase().includes('.m3u8') || finalUrl.toLowerCase().includes('.m3u8')) && window.Hls && Hls.isSupported()) {
             hlsInstance = new Hls({
                 maxBufferLength: 30,
             });
-            hlsInstance.loadSource(url);
+            hlsInstance.loadSource(finalUrl);
             hlsInstance.attachMedia(video);
             
             hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
-                if (resumeTime > 0) video.currentTime = resumeTime;
+                if (timeOverride > 0) video.currentTime = timeOverride;
                 video.play().catch(() => {});
                 durationEl.textContent = 'Live / ' + formatTime(video.duration);
             });
@@ -123,9 +133,9 @@
             });
         } else {
             // Native fallback
-            video.src = url;
-            if (resumeTime > 0) {
-                video.currentTime = resumeTime;
+            video.src = finalUrl;
+            if (timeOverride > 0) {
+                video.currentTime = timeOverride;
             }
             video.load();
             video.play().catch(() => {});
@@ -138,6 +148,41 @@
         showLoader(true);
 
         video.playbackRate = parseFloat(speedSelect.value);
+    }
+
+    // ===== Subtitles (SRT to VTT) =====
+    function srt2vtt(srt) {
+        const text = srt.trim();
+        if (text.startsWith('WEBVTT')) return text;
+        
+        // Simple SRT to VTT conversion: replace commas in timestamps with dots
+        return 'WEBVTT\n\n' + text.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+    }
+
+    async function loadSubtitles(url) {
+        try {
+            // Use proxy to bypass CORS for subtitles
+            const res = await fetch('/proxy?url=' + encodeURIComponent(url));
+            if (!res.ok) throw new Error('Subtitle fetch failed');
+            const text = await res.text();
+            
+            const vttText = srt2vtt(text);
+            const blob = new Blob([vttText], { type: 'text/vtt' });
+            const blobUrl = URL.createObjectURL(blob);
+            
+            const track = document.createElement('track');
+            track.kind = 'subtitles';
+            track.label = 'Custom Subtitles';
+            track.srclang = 'en';
+            track.src = blobUrl;
+            track.default = true;
+            
+            video.appendChild(track);
+            showToast('Subtitles loaded');
+        } catch (err) {
+            console.error('Subtitle error:', err);
+            showToast('Failed to load subtitles', true);
+        }
     }
 
     // ===== History Management =====
@@ -504,6 +549,27 @@
         document.body.classList.toggle('theater-mode');
         showToast(document.body.classList.contains('theater-mode') ? 'Theater Mode ON' : 'Theater Mode OFF');
     });
+
+    // CC Toggle
+    if (ccBtn) {
+        ccBtn.addEventListener('click', () => {
+            const tracks = video.textTracks;
+            if (!tracks || tracks.length === 0) {
+                showToast('No subtitles available', true);
+                return;
+            }
+            const track = tracks[0];
+            if (track.mode === 'showing') {
+                track.mode = 'hidden';
+                ccBtn.style.color = '';
+                showToast('Subtitles Off');
+            } else {
+                track.mode = 'showing';
+                ccBtn.style.color = '#ff006e';
+                showToast('Subtitles On');
+            }
+        });
+    }
 
     // Fullscreen
     fullscreenBtn.addEventListener('click', () => {
