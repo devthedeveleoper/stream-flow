@@ -20,6 +20,9 @@ The backend is a highly optimized, native Cloudflare Worker (`src/index.ts`) tha
 The frontend (`public/`) is served statically using Cloudflare's new Worker Assets configuration, meaning the HTML, CSS, and JS are served globally from the edge with ultra-low latency, right alongside the proxy API.
 
 **Key Features:**
+- **Live HLS Support:** Dynamically loads `hls.js` when streaming `.m3u8` playlists, unlocking live TV and adaptive bitrate streaming support directly in the browser.
+- **Picture-in-Picture & Theater Mode:** Native PiP support allows you to pop the video out into a floating window, while Theater Mode provides an immersive, cinema-wide viewing experience.
+- **"Continue Watching" History:** Remembers your recently streamed URLs and exactly where you left off, saved locally so you can resume playback instantly.
 - **Premium Glassmorphic UI:** A visually stunning, state-of-the-art dark mode interface featuring dynamic neon gradients and background blurring (`backdrop-filter`).
 - **60fps Debounced Rendering:** Custom progress bar updates and slider dragging are tethered to `requestAnimationFrame`, avoiding layout thrashing and guaranteeing buttery smooth UI interactions.
 - **Auto-Recovery Engine:** If a transient network failure drops the video connection mid-stream, the player automatically intercepts the error, reconnects to the stream, and resumes playback from the exact timestamp.

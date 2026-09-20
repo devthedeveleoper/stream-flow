@@ -8,6 +8,8 @@
     const skipBackBtn = document.getElementById('skipBackBtn');
     const skipForwardBtn = document.getElementById('skipForwardBtn');
     const fullscreenBtn = document.getElementById('fullscreenBtn');
+    const pipBtn = document.getElementById('pipBtn');
+    const theaterBtn = document.getElementById('theaterBtn');
     const muteBtn = document.getElementById('muteBtn');
     const volumeSlider = document.getElementById('volumeSlider');
     const speedSelect = document.getElementById('speedSelect');
@@ -22,6 +24,8 @@
     const pauseIcon = document.getElementById('pauseIcon');
     const toast = document.getElementById('toast');
     const videoOverlay = document.getElementById('videoOverlay');
+    const historySection = document.getElementById('historySection');
+    const historyList = document.getElementById('historyList');
 
     // ===== State =====
     let isDragging = false;
@@ -33,6 +37,7 @@
     let currentVideoUrl = null;
     let autoRetryCount = 0;
     const MAX_RETRIES = 3;
+    let hlsInstance = null;
 
     // Load saved speed
     const savedSpeed = localStorage.getItem('sf_speed');
@@ -48,17 +53,57 @@
 
         const useProxy = useProxyCheckbox.checked;
         if (!retryUrl && useProxy) {
+            // For HLS, proxying the master playlist often breaks relative TS segments unless the proxy rewrites them.
+            // But we'll leave it as requested for now.
             url = '/proxy?url=' + encodeURIComponent(url);
         }
 
         currentVideoUrl = url;
-        video.src = url;
         
-        if (resumeTime > 0) {
-            video.currentTime = resumeTime;
+        // Clean up previous HLS instance if it exists
+        if (hlsInstance) {
+            hlsInstance.destroy();
+            hlsInstance = null;
         }
 
-        video.load();
+        // HLS Support
+        if ((urlInput.value.trim().toLowerCase().includes('.m3u8') || url.toLowerCase().includes('.m3u8')) && window.Hls && Hls.isSupported()) {
+            hlsInstance = new Hls({
+                maxBufferLength: 30,
+            });
+            hlsInstance.loadSource(url);
+            hlsInstance.attachMedia(video);
+            
+            hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+                if (resumeTime > 0) video.currentTime = resumeTime;
+                video.play().catch(() => {});
+                durationEl.textContent = 'Live / ' + formatTime(video.duration);
+            });
+            
+            hlsInstance.on(Hls.Events.ERROR, function(event, data) {
+                if (data.fatal) {
+                    switch(data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            hlsInstance.startLoad();
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            hlsInstance.recoverMediaError();
+                            break;
+                        default:
+                            hlsInstance.destroy();
+                            break;
+                    }
+                }
+            });
+        } else {
+            // Native fallback
+            video.src = url;
+            if (resumeTime > 0) {
+                video.currentTime = resumeTime;
+            }
+            video.load();
+            video.play().catch(() => {});
+        }
         
         // UI Transitions
         urlSection.style.display = 'none';
@@ -67,11 +112,65 @@
         showLoader(true);
 
         video.playbackRate = parseFloat(speedSelect.value);
-
-        video.play().catch((e) => {
-            // Autoplay prevented or failed silently
-        });
     }
+
+    // ===== History Management =====
+    function loadHistory() {
+        try {
+            const history = JSON.parse(localStorage.getItem('sf_history') || '[]');
+            if (history.length > 0) {
+                historySection.style.display = 'block';
+                historyList.innerHTML = history.map((item, index) => `
+                    <div class="history-item" data-index="${index}">
+                        <span class="history-url" title="${item.originalUrl}">${item.originalUrl}</span>
+                        <span class="history-time">${formatTime(item.time)}</span>
+                    </div>
+                `).join('');
+                
+                // Add click listeners
+                document.querySelectorAll('.history-item').forEach(el => {
+                    el.addEventListener('click', () => {
+                        const idx = el.getAttribute('data-index');
+                        const item = history[idx];
+                        urlInput.value = item.originalUrl;
+                        useProxyCheckbox.checked = item.usedProxy;
+                        loadVideo(null, item.time);
+                    });
+                });
+            } else {
+                historySection.style.display = 'none';
+            }
+        } catch (e) {}
+    }
+
+    function saveToHistory() {
+        if (!currentVideoUrl || video.currentTime < 5) return;
+        try {
+            let history = JSON.parse(localStorage.getItem('sf_history') || '[]');
+            const originalUrl = urlInput.value.trim();
+            
+            // Remove existing entry for same URL
+            history = history.filter(h => h.originalUrl !== originalUrl);
+            
+            // Add to top
+            history.unshift({
+                originalUrl: originalUrl,
+                usedProxy: useProxyCheckbox.checked,
+                time: video.currentTime,
+                timestamp: Date.now()
+            });
+            
+            // Keep only last 10
+            history = history.slice(0, 10);
+            localStorage.setItem('sf_history', JSON.stringify(history));
+            loadHistory(); // refresh UI
+        } catch (e) {}
+    }
+
+    // Periodically save history if watching for a long time
+    setInterval(() => {
+        if (!video.paused && currentVideoUrl) saveToHistory();
+    }, 30000);
 
     // ===== UI Updates =====
     function showToast(msg, isError = false) {
@@ -130,7 +229,7 @@
 
     let dragRaf = null;
     function seek(e) {
-        if (dragRaf) return; // Prevent layout thrashing during mousemove
+        if (dragRaf) return; 
         
         dragRaf = requestAnimationFrame(() => {
             const rect = progressContainer.getBoundingClientRect();
@@ -155,12 +254,24 @@
     });
 
     backBtn.addEventListener('click', () => {
+        saveToHistory();
         video.pause();
-        video.removeAttribute('src'); // Better memory cleanup
+        if (hlsInstance) {
+            hlsInstance.destroy();
+            hlsInstance = null;
+        }
+        video.removeAttribute('src'); 
         video.load();
         currentVideoUrl = null;
         updatePlayIcon(false);
         playerSection.classList.remove('active');
+        document.body.classList.remove('theater-mode');
+        
+        // Exit PiP if active
+        if (document.pictureInPictureElement) {
+            document.exitPictureInPicture().catch(()=>{});
+        }
+
         setTimeout(() => {
             urlSection.style.display = 'block';
             progressPlayed.style.width = '0%';
@@ -184,11 +295,12 @@
     video.addEventListener('play', () => {
         updatePlayIcon(true);
         showLoader(false);
-        autoRetryCount = 0; // Reset retries on successful play
+        autoRetryCount = 0; 
     });
 
     video.addEventListener('pause', () => {
         updatePlayIcon(false);
+        saveToHistory();
     });
 
     video.addEventListener('ended', () => {
@@ -214,7 +326,7 @@
         showLoader(false);
         const error = video.error;
         
-        // Auto-recovery for dropped connections mid-stream (Error Code 2: Network Error)
+        // Auto-recovery
         if (error && error.code === 2 && currentVideoUrl && video.currentTime > 0) {
             if (autoRetryCount < MAX_RETRIES) {
                 autoRetryCount++;
@@ -240,7 +352,7 @@
     skipBackBtn.addEventListener('click', () => skip(-10));
     skipForwardBtn.addEventListener('click', () => skip(10));
 
-    // Progress bar - interactions
+    // Progress bar
     progressContainer.addEventListener('click', seek);
 
     progressContainer.addEventListener('mousedown', (e) => {
@@ -282,7 +394,6 @@
     function updateMuteUI() {
         isMuted = video.muted;
         
-        // Persist settings
         localStorage.setItem('sf_muted', isMuted);
         localStorage.setItem('sf_volume', video.volume);
 
@@ -300,6 +411,27 @@
         video.playbackRate = parseFloat(speedSelect.value);
         localStorage.setItem('sf_speed', speedSelect.value);
         showToast(`${speedSelect.value}x Speed`);
+    });
+
+    // PiP
+    pipBtn.addEventListener('click', async () => {
+        try {
+            if (document.pictureInPictureElement) {
+                await document.exitPictureInPicture();
+            } else if (document.pictureInPictureEnabled) {
+                await video.requestPictureInPicture();
+            } else {
+                showToast('PiP is not supported by your browser', true);
+            }
+        } catch (err) {
+            showToast('Failed to enter PiP mode', true);
+        }
+    });
+
+    // Theater Mode
+    theaterBtn.addEventListener('click', () => {
+        document.body.classList.toggle('theater-mode');
+        showToast(document.body.classList.contains('theater-mode') ? 'Theater Mode ON' : 'Theater Mode OFF');
     });
 
     // Fullscreen
@@ -326,6 +458,14 @@
             case 'f':
             case 'F':
                 fullscreenBtn.click();
+                break;
+            case 't':
+            case 'T':
+                theaterBtn.click();
+                break;
+            case 'p':
+            case 'P':
+                pipBtn.click();
                 break;
             case 'm':
             case 'M':
@@ -354,9 +494,9 @@
 
     // ===== Auto-load from URL param =====
     const params = new URLSearchParams(window.location.search);
-    const videoUrl = params.get('url');
-    if (videoUrl) {
-        urlInput.value = decodeURIComponent(videoUrl);
+    const urlParam = params.get('url');
+    if (urlParam) {
+        urlInput.value = decodeURIComponent(urlParam);
         loadVideo();
     }
 
@@ -364,4 +504,5 @@
     video.muted = isMuted;
     video.volume = isMuted ? 0 : lastVolume;
     updateMuteUI();
+    loadHistory();
 })();
