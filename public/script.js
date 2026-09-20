@@ -59,6 +59,14 @@
         fetch('/metadata?url=' + encodeURIComponent(urlInput.value.trim()))
             .then(res => res.json())
             .then(data => {
+                console.log('🔍 METADATA CLUES:', data);
+                if (data.contentType) {
+                    console.log('Content-Type:', data.contentType);
+                    if (data.contentType.includes('matroska') || data.contentType.includes('mkv')) {
+                        console.warn('⚠️ WARNING: MKV files are not fully supported by browsers. Audio (like AC3) will often fail to play!');
+                        showToast('MKV Audio might not be supported', true);
+                    }
+                }
                 if (data.title) {
                     videoTitle.textContent = data.title;
                 } else {
@@ -568,4 +576,13 @@
     video.volume = isMuted ? 0 : lastVolume;
     updateMuteUI();
     loadHistory();
+
+    // Clean up any zombie service workers from previous PWA tests
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            for (let registration of registrations) {
+                registration.unregister();
+            }
+        });
+    }
 })();

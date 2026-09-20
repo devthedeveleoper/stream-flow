@@ -134,71 +134,83 @@ async function handleProxy(request: Request): Promise<Response> {
 	const method = request.method;
 
 	try {
-		const headers: Record<string, string> = {
+		// Forward specific headers from the client
+		const clientHeaders = new Headers(request.headers);
+		const headersToForward = new Headers({
 			'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 StreamFlow/1.0',
-			Accept: '*/*',
-			'Accept-Encoding': 'identity',
-			Connection: 'keep-alive',
-		};
+			'Accept': clientHeaders.get('Accept') || '*/*',
+			'Connection': 'keep-alive',
+			'Accept-Encoding': 'identity'
+		});
 
-		if (range) {
-			headers['Range'] = range;
-		}
+		// Pass through caching and range headers to ensure stable streaming
+		const passthroughRequestHeaders = ['Range', 'If-Match', 'If-Range', 'If-Modified-Since', 'If-Unmodified-Since'];
+		passthroughRequestHeaders.forEach(h => {
+			if (clientHeaders.has(h)) headersToForward.set(h, clientHeaders.get(h)!);
+		});
 
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 seconds
 
-		const response = await fetch(videoUrl, {
-			method: method,
-			headers: headers,
-			signal: controller.signal
-		});
+		let fetchUrl = videoUrl;
+		let response: Response | null = null;
+		let redirectCount = 0;
+
+		// Manually follow redirects so that cross-origin redirects don't drop the Range header
+		while (redirectCount < 5) {
+			response = await fetch(fetchUrl, {
+				method: method,
+				headers: headersToForward,
+				signal: controller.signal,
+				redirect: 'manual'
+			});
+
+			const isRedirect = [301, 302, 303, 307, 308].includes(response.status);
+			if (isRedirect) {
+				const location = response.headers.get('Location');
+				if (location) {
+					fetchUrl = new URL(location, fetchUrl).toString();
+					redirectCount++;
+					continue;
+				}
+			}
+			break;
+		}
 		
 		clearTimeout(timeoutId);
 
-		if (!response.ok && response.status !== 206) {
+		if (!response || (!response.ok && response.status !== 206 && response.status !== 304)) {
 			return Response.json(
-				{ error: `Source responded with ${response.status}` },
+				{ error: `Source responded with ${response?.status || 500}` },
 				{ status: 502, headers: corsHeaders }
 			);
 		}
 
-		const contentType = response.headers.get('content-type') || 'video/mp4';
-		const contentLength = response.headers.get('content-length');
-		const contentRange = response.headers.get('content-range');
+		// Build response headers
+		const responseHeaders = new Headers(corsHeaders);
+		
+		// Pass through crucial response headers
+		const passthroughResponseHeaders = [
+			'Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges', 
+			'ETag', 'Last-Modified', 'Cache-Control', 'Expires'
+		];
+		
+		passthroughResponseHeaders.forEach(h => {
+			if (response.headers.has(h)) responseHeaders.set(h, response.headers.get(h)!);
+		});
 
-		const responseHeaders: Record<string, string> = {
-			...corsHeaders,
-			'Content-Type': contentType,
-			'Accept-Ranges': 'bytes',
-			'Cache-Control': 'public, max-age=3600', 
-		};
-
-		let statusCode = response.status;
-
-		if (range && statusCode === 200) {
-			statusCode = 206;
-			if (contentLength) {
-				const rangeMatch = range.match(/bytes=(\d+)-(\d*)/);
-				if (rangeMatch) {
-					const start = parseInt(rangeMatch[1]);
-					const end = rangeMatch[2] ? parseInt(rangeMatch[2]) : parseInt(contentLength) - 1;
-					responseHeaders['Content-Range'] = `bytes ${start}-${end}/${contentLength}`;
-					responseHeaders['Content-Length'] = String(end - start + 1);
-				}
-			}
-		} else if (contentLength) {
-			responseHeaders['Content-Length'] = contentLength;
+		// Fallbacks if origin doesn't provide them
+		if (!responseHeaders.has('Content-Type')) {
+			responseHeaders.set('Content-Type', 'video/mp4');
 		}
-
-		if (contentRange) {
-			responseHeaders['Content-Range'] = contentRange;
+		if (!responseHeaders.has('Accept-Ranges')) {
+			responseHeaders.set('Accept-Ranges', 'bytes');
 		}
 
 		const body = method === 'HEAD' ? null : response.body;
 
 		return new Response(body, {
-			status: statusCode,
+			status: response.status,
 			headers: responseHeaders,
 		});
 	} catch (error) {
